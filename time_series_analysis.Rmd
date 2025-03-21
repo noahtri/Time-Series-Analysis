@@ -1,0 +1,421 @@
+---
+title: "Time Series Analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r Libraries, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(quantmod)
+library(fGarch)
+library(MASS)
+library(mnormt)
+library(copula)
+```
+
+Work done by Noah Tri: BA in Mathematics and Political Science from the University of Miami, 2024, and MS in Statistics from Columbia University, 2025.
+
+## Background Information
+
+I did the following analysis of Apple and Snapchat stock log return time series as part of a class I took in the Spring of 2024 from the University of Miami in pursuit of my Bachelor of Arts in Mathematics. The class was MTH 643: Statistical Analysis II with Financial Applications ([link](https://bulletin.miami.edu/courses-az/mth/)) taught by Dr. Victor Pestien. Textbooks used in class—and this analysis—were (1) *Statistics and Data Analysis for Financial Engineering, with R examples, 2nd edition*, by David Ruppert and David S. Matteson, and (2) *An Introduction to Statistical Learning, with Applications in R,* by Gareth James, Daniela Witten, Trevor Hastie, and Robert Tibshirani, 2nd edition. Formulas and reference code for the analysis comes from these textbooks.
+
+I chose to analyze the stocks of Apple and Snapchat as I hypothesized that there would be a slight positive relationship between them. I thought the relationship would be due to the fact that Snapchat depends on Apple for access to customers in the Apple App Store, but Snapchat is only a social media while Apple is a broader technology company.
+
+## Load and Preview Stock Price Time Series Plots
+
+The source of the data is Yahoo; the dates from 01-01-2019 through 02-14-2024 ; Snapchat is traded at the New York Stock Exchange and Apple is traded through NASDAQ.
+
+```{r , Load-Data}
+getSymbols("SNAP",src="yahoo",from=as.Date("2019-01-01",to=as.Date("2024-02-14"))) # to date doesn't work
+getSymbols("AAPL",src="yahoo",from=as.Date("2019-01-01",to=as.Date("2024-02-14")))
+
+SNAP <- SNAP[index(SNAP)<"2024-02-15"]
+AAPL <- AAPL[index(AAPL)<'2024-02-15']
+
+plot(SNAP[,4])
+plot(AAPL[,4])
+```
+
+These daily closing price plots both vary significantly. For SNAP, there is a peak in the middle of it and it trends downward on either side of the time series. However, with AAPL, there is a clear upward trend throughout the 5-year period. Thus, AAPL seems to not be stationary but has relatively low volatility besides the upward trend. SNAP also isn't stationary, and the volatility does seem to lessen over time, especially considering the past year and a half.
+
+For the rest of this analysis, we will use the log return time series for each stock as log returns tend to be relatively stationary with low volatility.
+
+```{r, get-log-returns}
+SNAPdifflog <- diff(log(SNAP[,6]))
+SNAPdifflog <- SNAPdifflog[-1,]
+
+AAPLdifflog <- diff(log(AAPL[,6]))
+AAPLdifflog <- AAPLdifflog[-1,]
+
+twinsdifflog <- cbind(SNAPdifflog, AAPLdifflog)
+
+plot(SNAPdifflog)
+plot(AAPLdifflog)
+plot(twinsdifflog)
+```
+
+The SNAP return log graph seems to be consistently inside the -.1 to .1 value, with a couple of considerable outlers, making it seem relatively stable. The AAPL return log graph is even less spread, with a couple of signficant values in March/April of 2020 from COVID-19 impacts, while recently the return logs are comparatively small. On the overlay graph, the SNAP return log values dominate over the AAPL return log values because the SNAP return log values tend to be larger, hence why we see little of the red from the AAPL return log.
+
+### Normal and Student-T Quantile-Quantile Plots
+
+```{r normal-qq-plots}
+sortedAAPLlog <- sort(as.numeric(AAPLdifflog))
+sortedSNAPlog <- sort(as.numeric(SNAPdifflog))
+
+normquantiles <- qnorm(1:1288/1289)
+plot(normquantiles,sortedAAPLlog, main = "AAPL Quantiles vs Gaussian Quantiles")
+plot(normquantiles,sortedSNAPlog, main = "SNAP Quantiles vs Gaussian Quantiles")
+```
+
+Both of these normal plots do not produce a line even close to linear, thus we have evidence against both the SNAP return log and AAPl return log do not have normal distribution. The SNAP normal plot in particular is very warped, having a slope near 0 between normal values between -2 and 2.
+
+Now lets turn to the Student-t quantile-quantile plots for 1, 4, 6, 10, and 20 degrees of freedom.
+
+```{r t1-qq-plots}
+t1quantiles <- qt(1:1288/1289,df=1)
+qqplot(t1quantiles, sortedAAPLlog, main = "AAPL Quantiles vs t with 1 df")
+qqplot(t1quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 1 df")
+```
+
+Student-t with 1 df warps each line opposite to the normal distribution, meaning we have significant evidence that both log return lines are do not have distribution of Student T with 1 degree of freedom.
+
+```{r t4-qq-plots}
+t4quantiles <- qt(1:1288/1289,df=4)
+qqplot(t4quantiles, sortedAAPLlog, main = "AAPL Quantiles vs t with 4 dfs")
+qqplot(t4quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 4 dfs")
+```
+
+```{r t6-qq-plots}
+t6quantiles <- qt(1:1288/1289,df=6)
+qqplot(t6quantiles, sortedAAPLlog, main = "AAPL Quantiles vs t with 6 dfs")
+qqplot(t6quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 6 dfs")
+```
+
+```{r t10-qq-plots}
+t10quantiles <- qt(1:1288/1289,df=10)
+qqplot(t10quantiles, sortedAAPLlog, main = "AAPL Quantiles vs t with 10 dfs")
+qqplot(t10quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 10 dfs")
+```
+
+```{r t20-qq-plots}
+t20quantiles <- qt(1:1288/1289,df=20)
+qqplot(t20quantiles, sortedAAPLlog, main = "AAPL Quantiles vs t with 20 dfs")
+qqplot(t20quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 20 dfs")
+```
+
+The AAPL return log qq plot looks the straightest when plotted with a Student T distribution with 4 degrees of freedom, although it doesn't form a perfectly straight line. When there are 6, 10, and 20 degrees of freedom, the AAPL return log is warped much like the normal plot from problem 3, getting less linear with more degrees of freedom.
+
+The SNAP return log qq plot changes the way in which it is warped between 1 and 4 degrees of freedom. All the plots with more than 4 degrees of freedom for t look similar to the normal qq plot in problem 3. So I will plot qq plots for SNAP return log and student T with 2 and 3 degrees of freedom to check if those look linear:
+
+```{r t2-qq-plot}
+t2quantiles <- qt(1:1288/1289,df=2)
+qqplot(t2quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 2 dfs")
+
+t3quantiles <- qt(1:1288/1289,df=3)
+qqplot(t3quantiles, sortedSNAPlog, main = "SNAP Quantiles vs t with 3 dfs")
+```
+
+Neither one of those two qq plots are linear (even though they are more linear than with 1 or 4 degrees of freedom), so we have evidence against the SNAP return log having a student T distribution.
+
+### Kernel Density Estimates Over the Fit Student-T Distribution
+
+```{r}
+x=seq(-0.1, 0.1,by = 0.001)
+par(mfrow = c(1, 1)) 
+df=4
+mad_t = mad(SNAPdifflog,
+   constant = sqrt(df / (df - 2)) / qt(0.75, df))
+plot(density(SNAPdifflog), lwd = 2, ylim = c(0, 15))
+lines(x, dstd(x, mean = mean(SNAPdifflog), sd = mad_t, nu = df),
+   lty = 5, lwd = 2, col = "red")
+lines(x, dnorm(x, mean = mean(SNAPdifflog), sd = sd(SNAPdifflog)),
+   lty = 3, lwd = 4, col = "blue")
+legend("topleft", c("KDE", paste("t: df = ",df), "normal"),
+   lwd = c(2, 2, 4), lty = c(1, 5, 3),
+   col = c("black", "red", "blue"))
+
+mad_t = mad(AAPLdifflog,
+   constant = sqrt(df / (df - 2)) / qt(0.75, df))
+plot(density(AAPLdifflog), lwd = 2, ylim = c(0, 30))
+lines(x, dstd(x, mean = mean(AAPLdifflog), sd = mad_t, nu = df),
+   lty = 5, lwd = 2, col = "red")
+lines(x, dnorm(x, mean = mean(AAPLdifflog), sd = sd(AAPLdifflog)),
+   lty = 3, lwd = 4, col = "blue")
+legend("topleft", c("KDE", paste("t: df = ",df), "normal"),
+   lwd = c(2, 2, 4), lty = c(1, 5, 3),
+   col = c("black", "red", "blue"))
+```
+
+Both the KDE's for AAPL and SNAP log returns are almost aligned to the parametric density estimates for the student T distribution with 4 degrees of freedom. The peak for the SNAP log return matches the peak for the student T parametric density estimate, while the peaks are slightly separated for the AAPL log return. Notably, both KDEs do not match at all with the parametric density estimate for the normal curve.
+
+### Discussion
+
+The SNAP and AAPL return logs both show a near boundedness that they typically do not reach below or above. Yet, the AAPL return log seems to be much more stable, in part due to the consistent upward trajectory and limited volatility of the stock price over time. As such, AAPL return log seems to fit the Student-t distribution with 6 degrees of freedom relatively nicely while SNAP seems to relatively fit a Student-t distribution with between 2 and 3 degrees of freedom. Now, they both are stretched out horizontally in the normal qq plot and the student-t quantile-quantile plots with 10 or more degrees of freedom, meaning they have a more spread distribution.
+
+# Using the Previous Days to Predict the Direction of the Log Return
+
+### GLM for Each Log Return
+
+```{r Snap-GLM}
+Direction <- as.vector(as.numeric(SNAPdifflog[-c(1,2)]>0))
+lag1 <- as.vector(SNAPdifflog[-c(1, 1288)])
+lag2 <- as.vector(SNAPdifflog[-c(1287, 1288)])
+vol <- as.vector(SNAP[3:1288,5])
+SNAPdifflognew <- data.frame(cbind(Direction, lag1, lag2, vol))
+
+SNAPtrain <- SNAPdifflognew[1:1000,]
+SNAPtest <- SNAPdifflognew[1001:1286,]
+SNAPDirection.test <- SNAPtest[,1]
+
+glm.SNAP <- glm(Direction ~ lag1 + lag2 + vol, data = SNAPtrain,
+                family = binomial)
+summary(glm.SNAP)
+glm.probs <- predict(glm.SNAP, SNAPtest, type = "response")
+
+glm.pred <- rep(0, 286)
+glm.pred[glm.probs > .5] <- 1
+table(glm.pred, SNAPDirection.test)
+mean(glm.pred == SNAPDirection.test)
+```
+
+The logistic regression model for the SNAP log return gives relatively large p-values for each regressor, so we don't have clear evidence that each one is associated with Direction. As far as the test set, this model does a pretty poor job predicting the Direction, predicting the stock price will go up over 68% of the days. Overall, it predicts 51% of the 286 test points right, which is poor, even worse than just predicting Up every time.
+
+```{r AAPL-GLM}
+Direction <- as.vector(as.numeric(AAPLdifflog[-c(1,2)]>0))
+lag1 <- as.vector(AAPLdifflog[-c(1, 1288)])
+lag2 <- as.vector(AAPLdifflog[-c(1287, 1288)])
+vol <- as.vector(AAPL[3:1288,5])
+AAPLdifflognew <- data.frame(cbind(Direction, lag1, lag2, vol))
+
+AAPLtrain <- AAPLdifflognew[1:1000,]
+AAPLtest <- AAPLdifflognew[1001:1286,]
+AAPLDirection.test <- AAPLtest[,1]
+
+glm.AAPL <- glm(Direction ~ lag1 + lag2 + vol, data = AAPLtrain,
+                family = binomial)
+summary(glm.AAPL)
+glm.probs <- predict(glm.AAPL, AAPLtest, type = "response")
+
+glm.pred <- rep(0, 286)
+glm.pred[glm.probs > .5] <- 1
+table(glm.pred, AAPLDirection.test)
+mean(glm.pred == AAPLDirection.test)
+mean(AAPLDirection.test)
+```
+
+The logistic regression model for the AAPL log return gives relatively large p-values for each regressor besides lag1, which is a low p-value so we have evidence in this model that lag1 is asssociated with Direction (the negative coefficient suggests that AAPL will go up if the previous day it went down). As far as the test set, this model predicts the stock price will go up over 85% of the days. Overall, it predicts 52.8% of the 297 test points right, which is worse than just predicting Up everytime to get an accuracy of 53.8%.
+
+### LDA Model for each Log Return Series
+
+```{r SNAP-LDA}
+lda.fit <- lda(Direction ~ lag1 + lag2, data = SNAPtrain)
+lda.pred <- predict(lda.fit, SNAPtest)
+lda.class <- lda.pred$class
+table(lda.class, SNAPDirection.test)
+mean(lda.class == SNAPDirection.test)
+mean(SNAPDirection.test)
+```
+
+The LDA model for the SNAP log return series is very similar to the GLM model in correctness and predicting more Ups than Downs for the Direction. In fact, this model gets 2 less correct predictions compared to the GLM model. Now, the confusion matrix tells us that the model predicts Up at a higher accuracy than guessing, but not better than purely guessing Up every time.
+
+```{r AAPL-LDA}
+lda.fit <- lda(Direction ~ lag1 + lag2, data = AAPLtrain)
+lda.pred <- predict(lda.fit, AAPLtest)
+lda.class <- lda.pred$class
+table(lda.class, AAPLDirection.test)
+mean(lda.class == AAPLDirection.test)
+```
+
+The LDA model for the AAPL log return series is slightly better than the GLM as far as accuracy, landing just below predicting Up every day (52.9% accuracy). However, this model essentially does predict Up everyday, as it only predicted Down 23 of the 297 test points with an accuracy of just above 50%. The confusion matrix doesn't have any other significant results between predictions of Up or Down.
+
+# Fitting a Bivariate Student-t Distribution to the Log Returns
+
+Before analyzing the relationship of the log returns of Apple and Snapchat, let's remind ourselves of their overlaid plot looks like.
+
+```{r log-return-plot}
+plot(twinsdifflog, col = c("lightblue", "black"))
+```
+
+There appears to be a barely discernable positive correlation between the two log returns for Apple and Snapchat. There is a massive congregate of points around the origin, and these points create almost an oval which has more mass in the first and fourth quadrants, meaning that if one log return is positive, the other one tends to be positive and vice versa. There are some extreme values of SNAPdifflog that don't correspond with extreme values of AAPLdifflog, so we have some outliers from viewing this data.
+
+### Fitting the Distribution using Maximum Likelihood Estimation
+
+```{r bivariate-t}
+difflogs <- cbind(AAPLdifflog, SNAPdifflog)
+df <- seq(2.75, 4.25, .01)
+n <- length(df)
+loglik <- rep(0,n)
+for(i in 1:n){
+  fit <- cov.trob(difflogs,nu=df[i], cor=TRUE)
+  loglik[i] <- sum(log(dmt(difflogs, mean=fit$center,
+                    S = fit$cov, df = df[i])))}
+max(loglik)==loglik[60]
+bestfit <- cov.trob(difflogs, nu = df[60], cor = TRUE)
+bestfit$center
+bestfit$cor
+```
+
+3.34 is the estimate for nu (the degrees of freedom), mu for AAPL log return is .001601 and mu for SNAP is .001675, and the correlation between AAPL and SNAP return logs is .4232006.
+
+### Confidence Interval for the Degrees of Freedom for the Bivariate Student-t Distribution
+
+```{r CI-df}
+aic_t<- -max(2*loglik)+64000
+z1 <- (2 * loglik > 2 * max(loglik) - qchisq(0.95, 1)) 
+z1[16]
+z1[17]
+z1[112]
+z1[113]
+plot(df,2 * loglik - 64000, type = "l", cex.axis = 1.5,
+      cex.lab = 1.5, ylab = "2 * loglikelihood - 64,000", lwd = 2)
+abline(h = 2 * max(loglik) - qchisq(0.95, 1 ) - 64000)
+abline(h = 2 * max(loglik) - 64000)
+abline(v = (df[16] + df[17]) / 2)
+abline(v = (df[112] + df[113]) / 2)
+```
+
+The 95% confidence interval for nu is (2.915, 3.865).
+
+### Estimating Standard Deviations from Fit Student-t Distribution
+
+```{r sd-estimates}
+Snapfit <- fitdistr(SNAPdifflog, densfun = "t", lower = .00001)$estimate
+Snapfit
+Snap_sd_estimate <- Snapfit[2] * sqrt( Snapfit[3] / (Snapfit[3]-2) )
+Snap_sd_estimate
+
+AAPLfit <- fitdistr(AAPLdifflog, densfun = "t", lower = .0001)$estimate
+AAPLfit
+AAPL_sd_estimate <- AAPLfit[2] * sqrt( AAPLfit[3] / (AAPLfit[3]-2) )
+AAPL_sd_estimate
+```
+
+The estimated standard deviations for the Snap and AAPL log returns are .04699 and .02066, respectively.
+
+### Correlation Analysis
+
+```{r correlations}
+cor_pear <- cor(difflogs, method = c("pearson"))
+cor_pear
+cor_kend <- cor(difflogs, method = c("kendall"))
+cor_kend
+sin(pi*cor_kend/2)
+```
+
+Our kendall and pearson correlations are somewhat close but not very close and the sin(pi/2\*kendall_correlation) isn't close to the pearson correlation, so we can conclude that the data does not come from a normal distribution.
+
+# Copula Analysis
+
+```{r t-copula}
+omega <- cor(AAPLdifflog, SNAPdifflog, method = c("pearson"))
+cop_t_dim2 <- tCopula(omega, dim = 2, dispstr = "un", df = 3)
+
+est.AAPL <- as.numeric(AAPLfit)
+est.SNAP <- as.numeric(Snapfit)
+est.AAPL[2] <- est.AAPL[2] * sqrt(est.AAPL[3] / (est.AAPL[3]-2))
+est.SNAP[2] <- est.SNAP[2] * sqrt(est.SNAP[3] / (est.SNAP[3]-2))
+
+data1 <- as.matrix(cbind(pstd(AAPLdifflog, est.AAPL[1], est.AAPL[2], est.AAPL[3]),
+               pstd(SNAPdifflog, est.SNAP[1], est.SNAP[2], est.SNAP[3])))
+ft1 <- fitCopula(cop_t_dim2, data1, method="ml", start=c(omega,3))
+ft1
+sqrt(ft1@var.est)
+```
+
+The estimates for the parameters of the t copula are .4402 for rho and 9.60 for the degrees of freedoms with standard errors of .0227 and 2.89, respectively.
+
+### Fitting other Types of Copulas
+
+-   Gaussian, Clayton, and Joe copulas
+
+```{r gaussian-copula}
+fnorm <- fitCopula(copula=normalCopula(dim=2),data=data1,method="ml")
+fnorm
+sqrt(fnorm@var.est)
+```
+
+The estimate of the parameter for the Gaussian copula is .43 with a standard error of .0209.
+
+```{r clayton-copula}
+fclayton <- fitCopula(copula = claytonCopula(1, dim=2),
+                     data = data1, method = "ml")
+fclayton
+sqrt(fclayton@var.est)
+```
+
+The estimate of the parameter for the Clayton Copula is .8228 with a standard error of .0513.
+
+```{r joe-copula}
+fjoe <- fitCopula(copula=joeCopula(2,dim=2),data=data1,method="ml")
+fjoe
+sqrt(fjoe@var.est)
+```
+
+The estimate of the parameter for the Joe Copula is 1.41 with a standard error of .042.
+
+### Contour Plots of the Cumulative Densities of the Fitted Copulas
+
+```{r contour-1}
+contour(tCopula(param=ft1@estimate[1],dim=2,df=round(ft1@estimate[2])),
+        pCopula, main = expression(hat(C)[t]),
+        xlab = expression(hat(U)[1]),
+        ylab = expression(hat(U)[2]))
+contour(normalCopula(param=fnorm@estimate[1], dim = 2),
+        pCopula, main = expression(hat(C)[Gauss]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(claytonCopula(param=fclayton@estimate[1], dim = 2),
+        pCopula, main = expression(hat(C)[Cl]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(joeCopula(param=fjoe@estimate[1], dim = 2),
+        pCopula, main = expression(hat(C)[Joe]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+```
+
+### Contour Plots of the Probability Densities of the Fitted Copulas
+
+```{r contour-2}
+contour(tCopula(param=ft1@estimate[1],dim=2,df=round(ft1@estimate[2])),
+        dCopula, main = expression(hat(C)[t]),
+        xlab = expression(hat(U)[1]),
+        ylab = expression(hat(U)[2]))
+contour(normalCopula(param=fnorm@estimate[1], dim = 2),
+        dCopula, main = expression(hat(C)[Gauss]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(claytonCopula(param=fclayton@estimate[1], dim = 2),
+        dCopula, main = expression(hat(C)[Cl]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(joeCopula(param=fjoe@estimate[1], dim = 2),
+        dCopula, main = expression(hat(C)[Joe]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+```
+
+The t and Gaussian copulas have similar features, but the Gaussian copula seems to go out wider and thus has higher densities closer to the upper left and lower right whereas the t copula has very little density in those same corners. But they do appear to be relatively symmetrical. Now the Clayton copula has higher density and the main concentration of its density in the lower left corner while the Joe copula has high density in the upper right corner only and no peak in the bottom left.
+
+### The KDE overlaid on the Probability Densities of the Copulas
+
+```{r contour-3}
+contour(tCopula(param=ft1@estimate[1],dim=2,df=round(ft1@estimate[2])),
+        dCopula, main = expression(hat(C)[t]),
+        xlab = expression(hat(U)[1]),
+        ylab = expression(hat(U)[2]))
+contour(kde2d(data1[,1],data1[,2]), col = 2, add = TRUE)
+
+contour(normalCopula(param=fnorm@estimate[1], dim = 2),
+        dCopula, main = expression(hat(C)[Gauss]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(kde2d(data1[,1],data1[,2]), col = 2, add = TRUE)
+
+contour(claytonCopula(param=fclayton@estimate[1], dim = 2),
+        dCopula, main = expression(hat(C)[Cl]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(kde2d(data1[,1],data1[,2]), col = 2, add = TRUE)
+
+contour(joeCopula(param=fjoe@estimate[1], dim = 2),
+        dCopula, main = expression(hat(C)[Joe]),
+        xlab = expression(hat(U)[1]), ylab = expression(hat(U)[2]) )
+contour(kde2d(data1[,1],data1[,2]), col = 2, add = TRUE)
+
+```
+
+The KDE also appears to have higher densities in the lower left and upper right corners. It looks to be more symmetrical than the Clayton and Joe copulas, but not quite as symmetrical as the t and Gaussian copulas. The upper left and lower right corners appear to look closer to the Gaussian copula than the t copula which is interesting given the goodness of fit of the Student-t distribution in both the univariate and bivariate case.
